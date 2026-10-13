@@ -186,13 +186,14 @@
   // ---------- 콘텐츠 ----------
   async function content(args, c) {
     const { h } = c;
-    const [log, drafts, seo, judged] = await Promise.allSettled([
+    const [log, drafts, seo, judged, heard] = await Promise.allSettled([
       c.gh(`/repos/${c.OWNER}/${OPS}/contents/content/log.md`, 'html'),
       dir(c, OPS, 'content/drafts'),
       dir(c, OPS, 'content/seo-drafts'),
       c.gh(`/repos/${c.OWNER}/${OPS}/contents/content/judgement.json`, 'raw').then((t) => JSON.parse(t)),
+      c.gh(`/repos/${c.OWNER}/${OPS}/contents/content/listening/threads.json`, 'raw').then((t) => JSON.parse(t)),
     ]);
-    if ([log, drafts, seo, judged].some((r) => r.status === 'rejected' && r.reason.status === 401)) return c.authFail();
+    if ([log, drafts, seo, judged, heard].some((r) => r.status === 'rejected' && r.reason.status === 401)) return c.authFail();
     const files = (r, empty) => (r.status === 'rejected' ? h('p', { class: 'muted' }, c.why(r.reason, OPS))
       : ul(c, r.value.filter((f) => f.type === 'file').sort((a, b) => sortDesc(a.name, b.name)).map((f) => c.row('', h('a', { href: `#/docs/${f.path}` }, f.name.replace(/\.md$/, '')))), empty));
     const n = (v) => (v == null ? '없음' : String(v));
@@ -222,10 +223,33 @@
       );
       } catch (e) { return h('p', { class: 'muted' }, `판정 파일 형식 이상 — ${String(e?.message ?? e)}`); }
     };
+    // 스레드 읽기(social.listen) — 파일이 없으면(듣기 안 켠 앱) 패널을 안 그린다
+    const SCOPE = { public: '공개 글', own_only: '우리 글만(심사 전)', no_permission: '검색 권한 없음', unknown: '결과 없음' };
+    const listening = () => {
+      if (heard.status === 'rejected') return heard.reason.status === 404 ? null : h('p', { class: 'muted' }, c.why(heard.reason, OPS));
+      const t = heard.value;
+      if (!t || typeof t !== 'object') return h('p', { class: 'muted' }, '수집 파일 형식 이상 — 객체가 아님');
+      try {
+        const kw = (t.search?.keywords || []).map((k) => h('div', {}, h('h4', {}, `${k.q} · ${(k.results || []).length}건`),
+          ul(c, [...(k.results || [])].sort((a, b) => sortDesc(a.timestamp || '', b.timestamp || '')).slice(0, 5)
+            .map((r) => c.row('', r.text || '(글 없음)', (r.timestamp || '').slice(0, 10))), '결과 없음')));
+        const ours = [...(t.posts || [])].sort((a, b) => (b.metrics?.views ?? -1) - (a.metrics?.views ?? -1)).slice(0, 3)
+          .map((p) => c.row('', p.text || '(글 없음)', `조회 ${n(p.metrics?.views)} · 좋아요 ${n(p.metrics?.likes)} · 댓글 ${n(p.metrics?.replies)}`));
+        return h('div', {},
+          h('p', {}, `수집 ${t.status} · 검색 범위 ${SCOPE[t.search?.scope] || n(t.search?.scope)} · 팔로워 ${n(t.account?.followers)}`),
+          ...kw,
+          h('h4', {}, '우리 계정 글(조회순)'), ul(c, ours, '글 없음'),
+          ...(t.errors || []).map((e) => h('p', { class: 'muted' }, e)),
+          h('p', { class: 'muted' }, `수집 ${n(t.fetchedAt)} · 남의 글은 요지 판단용 본문 일부만 저장(작성자·링크 없음) · 사람 메모는 `, h('a', { href: '#/docs/memory/listening/threads.md' }, 'memory/listening/threads.md')),
+        );
+      } catch (e) { return h('p', { class: 'muted' }, `수집 파일 형식 이상 — ${String(e?.message ?? e)}`); }
+    };
+    const heardPanel = listening();
     c.put(
       h('h2', {}, '콘텐츠'),
       h('p', { class: 'lede' }, '게시물마다 반응을 하루 한 번 모아 코드가 판정한다(은퇴·번식·뒤늦게 터짐). 출시 전엔 게시를 코드가 막고 초안과 검토 기록만 쌓인다.'),
       h('div', { class: 'panel' }, h('h3', {}, '인스타 생존'), survival()),
+      ...(heardPanel ? [h('div', { class: 'panel' }, h('h3', {}, '스레드 화제'), heardPanel)] : []),
       h('div', { class: 'cols' },
         h('div', { class: 'panel' }, h('h3', {}, '인스타·스레드 초안'), files(drafts, '초안 없음')),
         h('div', { class: 'panel' }, h('h3', {}, '검색 유입용 글(SEO) 초안'), files(seo, '초안 없음')),
